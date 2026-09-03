@@ -190,7 +190,7 @@ with col1:
     st.subheader("表示月")
     st.selectbox("対象月", ["2026年9月"], index=0, disabled=True,
                  help="MVPではダミー固定。実装時は月切替で範囲取得する想定")
-    st.info("優先度カラー\n\n🔴 高　🟡 中　🟢 低")
+    st.info("優先度カラー\n\n🔴 高　🟡 中　🟢 低\n\n⚠️マーク＝実績コメントあり（バーを長押し/タップで内容確認）")
     st.metric("登録タスク数", len(st.session_state.tasks))
 
 with col2:
@@ -205,12 +205,14 @@ items_for_js = [
         "content": (
             f"ロットNO:{t['lot_no']}<br>設計NO:{t['design_no']}<br>作業:{t['work_name']}"
             + ("<br>✅完了" if t["status"] == "完了" else "")
+            + (" ⚠️" if t.get("result_comment") else "")
         ),
         # 完了済みは実績期間、未完了は予定期間をバーとして表示
         "start": (t["actual_start"] or t["start"]).isoformat(),
         "end": (t["actual_end"] or t["end"]).isoformat(),
         "priority": t["priority"],
         "status": t["status"],
+        "comment": t.get("result_comment", ""),
     }
     for t in st.session_state.tasks
 ]
@@ -241,8 +243,10 @@ html_code = f"""
     content: t.content,
     start: t.start,
     end: t.end,
+    title: t.comment ? ("⚠️ 実績コメント: " + t.comment) : null,
     style: "background-color:" + priorityColor[t.priority] + "; border-color:#888;" +
-           (t.status === "完了" ? " opacity:0.55; border-style:dashed;" : "")
+           (t.status === "完了" ? " opacity:0.55; border-style:dashed;" : "") +
+           (t.comment ? " box-shadow: 0 0 0 2px #ff9800 inset;" : "")
   }})));
 
   const container = document.getElementById('visualization');
