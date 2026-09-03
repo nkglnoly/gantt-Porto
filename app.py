@@ -222,7 +222,9 @@ items_json = json.dumps(items_for_js, ensure_ascii=False)
 
 html_code = f"""
 <div id="visualization" style="width:100%; height:420px;"></div>
-<div id="moved-info" style="font-family:sans-serif; font-size:13px; margin-top:8px; color:#333;"></div>
+<div id="tapped-info" style="font-family:sans-serif; font-size:14px; margin-top:10px; padding:10px; border-radius:6px; background:#f5f5f5; min-height:24px; color:#333;">
+  タスクのバーをタップすると、ここにメモ・実績コメントが表示されます。
+</div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/vis-timeline/7.7.3/vis-timeline-graph2d.min.js"></script>
 <link href="https://cdnjs.cloudflare.com/ajax/libs/vis-timeline/7.7.3/vis-timeline-graph2d.min.css" rel="stylesheet" type="text/css" />
@@ -237,19 +239,18 @@ html_code = f"""
     "低": "#c8e6c9"
   }};
 
+  const itemDetailMap = {{}};
+  rawItems.forEach(t => {{ itemDetailMap[t.id] = t; }});
+
   const groups = new vis.DataSet(rawGroups);
 
   const items = new vis.DataSet(rawItems.map(t => {{
-    const tooltipParts = [];
-    if (t.memo) tooltipParts.push("📝 メモ: " + t.memo);
-    if (t.comment) tooltipParts.push("⚠️ 実績コメント: " + t.comment);
     return {{
       id: t.id,
       group: t.group,
       content: t.content,
       start: t.start,
       end: t.end,
-      title: tooltipParts.length ? tooltipParts.join("\\n") : null,
       style: "background-color:" + priorityColor[t.priority] + "; border-color:#888;" +
              (t.status === "完了" ? " opacity:0.55; border-style:dashed;" : "") +
              (t.comment ? " box-shadow: 0 0 0 2px #ff9800 inset;" : "")
@@ -277,7 +278,7 @@ html_code = f"""
       }}
     }},
     onMove: function(item, callback) {{
-      document.getElementById('moved-info').innerText =
+      document.getElementById('tapped-info').innerText =
         "タスクID " + item.id + " を移動: 開始=" + item.start.toLocaleString() + " 終了=" + item.end.toLocaleString() +
         "（※このプロトタイプでは後続タスクへの自動追従・保存はまだ未実装です／画面リロードで元に戻ります）";
       callback(item);
@@ -285,10 +286,25 @@ html_code = f"""
   }};
 
   const timeline = new vis.Timeline(container, items, groups, options);
+
+  timeline.on('select', function (properties) {{
+    const infoDiv = document.getElementById('tapped-info');
+    if (!properties.items || properties.items.length === 0) {{
+      infoDiv.innerText = "タスクのバーをタップすると、ここにメモ・実績コメントが表示されます。";
+      return;
+    }}
+    const t = itemDetailMap[properties.items[0]];
+    if (!t) return;
+    let lines = [];
+    lines.push("【" + t.content.replace(/<br>/g, " / ") + "】");
+    lines.push(t.memo ? ("📝 メモ: " + t.memo) : "📝 メモ: (なし)");
+    lines.push(t.comment ? ("⚠️ 実績コメント: " + t.comment) : "⚠️ 実績コメント: (なし)");
+    infoDiv.innerText = lines.join("\\n");
+  }});
 </script>
 """
 
-components.html(html_code, height=480, scrolling=False)
+components.html(html_code, height=540, scrolling=False)
 
 # =========================================================
 # ---- タスク明細＋完了処理＋実績コメント＋削除機能 ----
