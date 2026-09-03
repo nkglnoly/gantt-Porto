@@ -88,16 +88,20 @@ def get_work_duration(work_name: str) -> int:
 with st.sidebar:
     st.header("📝 タスク新規登録")
 
-    with st.form("task_register_form", clear_on_submit=True):
-        eq_labels = {e["content"]: e["id"] for e in EQUIPMENTS}
-        eq_choice = st.selectbox("設備", list(eq_labels.keys()))
+    eq_labels = {e["content"]: e["id"] for e in EQUIPMENTS}
+    eq_choice = st.selectbox("設備", list(eq_labels.keys()), key="eq_choice_select")
 
-        work_names = [w["work_name"] for w in st.session_state.work_master]
-        work_choice = st.selectbox("作業（マスタ選択）", work_names)
-
+    work_names = [w["work_name"] for w in st.session_state.work_master]
+    if not work_names:
+        st.warning("作業マスタが空です。先に作業マスタを登録してください。")
+        work_choice = None
+        duration_min = 0
+    else:
+        work_choice = st.selectbox("作業（マスタ選択）", work_names, key="work_choice_select")
         duration_min = get_work_duration(work_choice)
         st.caption(f"⏱ マスタ登録の所要時間：{duration_min}分（{duration_min/60:.1f}時間）")
 
+    with st.form("task_register_form", clear_on_submit=True):
         lot_no = st.text_input("ロットNO", placeholder="例：L005")
         design_no = st.text_input("設計NO", placeholder="例：D105")
         memo = st.text_area("メモ", placeholder="任意")
@@ -112,7 +116,9 @@ with st.sidebar:
         submitted = st.form_submit_button("✅ 登録する", use_container_width=True)
 
         if submitted:
-            if not lot_no or not design_no:
+            if not work_choice:
+                st.error("作業マスタが未登録のため登録できません。")
+            elif not lot_no or not design_no:
                 st.error("ロットNOと設計NOは必須です。")
             else:
                 start_dt = datetime.combine(start_date, start_time)
@@ -139,9 +145,9 @@ with st.sidebar:
 
     st.divider()
     st.subheader("⚙️ 作業マスタ管理")
-    with st.expander("作業マスタを編集"):
+    with st.expander("作業マスタを編集", expanded=False):
         for i, w in enumerate(st.session_state.work_master):
-            c1, c2, c3 = st.columns([2, 2, 1])
+            c1, c2, c3, c4 = st.columns([2, 2, 1, 1])
             with c1:
                 st.text(w["work_name"])
             with c2:
@@ -152,17 +158,27 @@ with st.sidebar:
                 st.session_state.work_master[i]["duration_min"] = new_dur
             with c3:
                 st.caption(f"{new_dur/60:.1f}h")
+            with c4:
+                if st.button("🗑", key=f"del_work_{w['work_name']}", use_container_width=True):
+                    st.session_state.work_master = [
+                        x for x in st.session_state.work_master if x["work_name"] != w["work_name"]
+                    ]
+                    st.success(f"「{w['work_name']}」を削除しました")
+                    st.rerun()
 
         st.markdown("---")
         new_work_name = st.text_input("新規作業名", key="new_work_name")
         new_work_dur = st.number_input("新規所要時間(分)", min_value=1, value=60, step=10, key="new_work_dur")
         if st.button("➕ マスタに追加", use_container_width=True):
             if new_work_name:
-                st.session_state.work_master.append(
-                    {"work_name": new_work_name, "duration_min": new_work_dur}
-                )
-                st.success(f"「{new_work_name}」を追加しました")
-                st.rerun()
+                if any(w["work_name"] == new_work_name for w in st.session_state.work_master):
+                    st.error(f"「{new_work_name}」は既に登録されています")
+                else:
+                    st.session_state.work_master.append(
+                        {"work_name": new_work_name, "duration_min": new_work_dur}
+                    )
+                    st.success(f"「{new_work_name}」を追加しました")
+                    st.rerun()
             else:
                 st.error("作業名を入力してください")
 
