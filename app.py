@@ -258,6 +258,12 @@ html_code = f"""
   }}));
 
   const container = document.getElementById('visualization');
+
+  const weekdayJa = ["日", "月", "火", "水", "木", "金", "土"];
+  function formatMajorDate(date) {{
+    return (date.getMonth() + 1) + "/" + date.getDate() + "(" + weekdayJa[date.getDay()] + ")";
+  }}
+
   const options = {{
     editable: {{
       updateTime: true,
@@ -275,6 +281,9 @@ html_code = f"""
     format: {{
       minorLabels: {{
         hour: 'HH:mm'
+      }},
+      majorLabels: {{
+        hour: formatMajorDate
       }}
     }},
     onMove: function(item, callback) {{
@@ -322,7 +331,16 @@ for t in st.session_state.tasks:
         c2.write(t["lot_no"])
         c3.write(t["design_no"])
         c4.write(t["work_name"])
-        c5.write(t["priority"])
+        with c5:
+            new_priority = st.selectbox(
+                "優先度", ["高", "中", "低"],
+                index=["高", "中", "低"].index(t["priority"]),
+                key=f"priority_select_{t['id']}",
+                label_visibility="collapsed",
+            )
+            if new_priority != t["priority"]:
+                t["priority"] = new_priority
+                st.rerun()
 
         if t["status"] == "完了":
             c6.write(
