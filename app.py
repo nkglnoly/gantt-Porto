@@ -190,7 +190,7 @@ with col1:
     st.subheader("表示月")
     st.selectbox("対象月", ["2026年9月"], index=0, disabled=True,
                  help="MVPではダミー固定。実装時は月切替で範囲取得する想定")
-    st.info("優先度カラー\n\n🔴 高　🟡 中　🟢 低\n\n⚠️マーク＝実績コメントあり（バーを長押し/タップで内容確認）")
+    st.info("優先度カラー\n\n🔴 高　🟡 中　🟢 低\n\n⚠️＝実績コメントあり　📝＝メモあり（バーを長押し/タップで内容確認）")
     st.metric("登録タスク数", len(st.session_state.tasks))
 
 with col2:
@@ -206,6 +206,7 @@ items_for_js = [
             f"ロットNO:{t['lot_no']}<br>設計NO:{t['design_no']}<br>作業:{t['work_name']}"
             + ("<br>✅完了" if t["status"] == "完了" else "")
             + (" ⚠️" if t.get("result_comment") else "")
+            + (" 📝" if t.get("memo") else "")
         ),
         # 完了済みは実績期間、未完了は予定期間をバーとして表示
         "start": (t["actual_start"] or t["start"]).isoformat(),
@@ -213,6 +214,7 @@ items_for_js = [
         "priority": t["priority"],
         "status": t["status"],
         "comment": t.get("result_comment", ""),
+        "memo": t.get("memo", ""),
     }
     for t in st.session_state.tasks
 ]
@@ -237,17 +239,22 @@ html_code = f"""
 
   const groups = new vis.DataSet(rawGroups);
 
-  const items = new vis.DataSet(rawItems.map(t => ({{
-    id: t.id,
-    group: t.group,
-    content: t.content,
-    start: t.start,
-    end: t.end,
-    title: t.comment ? ("⚠️ 実績コメント: " + t.comment) : null,
-    style: "background-color:" + priorityColor[t.priority] + "; border-color:#888;" +
-           (t.status === "完了" ? " opacity:0.55; border-style:dashed;" : "") +
-           (t.comment ? " box-shadow: 0 0 0 2px #ff9800 inset;" : "")
-  }})));
+  const items = new vis.DataSet(rawItems.map(t => {{
+    const tooltipParts = [];
+    if (t.memo) tooltipParts.push("📝 メモ: " + t.memo);
+    if (t.comment) tooltipParts.push("⚠️ 実績コメント: " + t.comment);
+    return {{
+      id: t.id,
+      group: t.group,
+      content: t.content,
+      start: t.start,
+      end: t.end,
+      title: tooltipParts.length ? tooltipParts.join("\\n") : null,
+      style: "background-color:" + priorityColor[t.priority] + "; border-color:#888;" +
+             (t.status === "完了" ? " opacity:0.55; border-style:dashed;" : "") +
+             (t.comment ? " box-shadow: 0 0 0 2px #ff9800 inset;" : "")
+    }};
+  }}));
 
   const container = document.getElementById('visualization');
   const options = {{
