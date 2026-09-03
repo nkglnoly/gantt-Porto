@@ -227,6 +227,7 @@ html_code = f"""
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/vis-timeline/7.7.3/vis-timeline-graph2d.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/locale/ja.min.js"></script>
 <link href="https://cdnjs.cloudflare.com/ajax/libs/vis-timeline/7.7.3/vis-timeline-graph2d.min.css" rel="stylesheet" type="text/css" />
 
 <script>
@@ -259,11 +260,6 @@ html_code = f"""
 
   const container = document.getElementById('visualization');
 
-  const weekdayJa = ["日", "月", "火", "水", "木", "金", "土"];
-  function formatMajorDate(date) {{
-    return (date.getMonth() + 1) + "/" + date.getDate() + "(" + weekdayJa[date.getDay()] + ")";
-  }}
-
   const options = {{
     editable: {{
       updateTime: true,
@@ -283,8 +279,11 @@ html_code = f"""
         hour: 'HH:mm'
       }},
       majorLabels: {{
-        hour: formatMajorDate
+        hour: 'M/D(ddd)'
       }}
+    }},
+    moment: function(date) {{
+      return vis.moment(date).locale('ja');
     }},
     onMove: function(item, callback) {{
       document.getElementById('tapped-info').innerText =
@@ -294,22 +293,30 @@ html_code = f"""
     }}
   }};
 
-  const timeline = new vis.Timeline(container, items, groups, options);
+  let timeline = null;
+  try {{
+    timeline = new vis.Timeline(container, items, groups, options);
+  }} catch (e) {{
+    document.getElementById('visualization').innerText = "ガント描画エラー: " + e.message;
+    console.error(e);
+  }}
 
-  timeline.on('select', function (properties) {{
-    const infoDiv = document.getElementById('tapped-info');
-    if (!properties.items || properties.items.length === 0) {{
-      infoDiv.innerText = "タスクのバーをタップすると、ここにメモ・実績コメントが表示されます。";
-      return;
-    }}
-    const t = itemDetailMap[properties.items[0]];
-    if (!t) return;
-    let lines = [];
-    lines.push("【" + t.content.replace(/<br>/g, " / ") + "】");
-    lines.push(t.memo ? ("📝 メモ: " + t.memo) : "📝 メモ: (なし)");
-    lines.push(t.comment ? ("⚠️ 実績コメント: " + t.comment) : "⚠️ 実績コメント: (なし)");
-    infoDiv.innerText = lines.join("\\n");
-  }});
+  if (timeline) {{
+    timeline.on('select', function (properties) {{
+      const infoDiv = document.getElementById('tapped-info');
+      if (!properties.items || properties.items.length === 0) {{
+        infoDiv.innerText = "タスクのバーをタップすると、ここにメモ・実績コメントが表示されます。";
+        return;
+      }}
+      const t = itemDetailMap[properties.items[0]];
+      if (!t) return;
+      let lines = [];
+      lines.push("【" + t.content.replace(/<br>/g, " / ") + "】");
+      lines.push(t.memo ? ("📝 メモ: " + t.memo) : "📝 メモ: (なし)");
+      lines.push(t.comment ? ("⚠️ 実績コメント: " + t.comment) : "⚠️ 実績コメント: (なし)");
+      infoDiv.innerText = lines.join("\\n");
+    }});
+  }}
 </script>
 """
 
