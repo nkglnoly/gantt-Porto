@@ -18,8 +18,9 @@ def ceil_to_hour(dt: datetime) -> datetime:
 # ---- マスタデータ：設備一覧 ----
 # =========================================================
 EQUIPMENTS = [
-    {"id": f"EQ{i:02d}", "content": f"設備{chr(64+i) if i <= 26 else i}号機"}
-    for i in range(1, 21)
+    {"id": "EQ01", "content": "設備A（プレス機）"},
+    {"id": "EQ02", "content": "設備B（溶接機）"},
+    {"id": "EQ03", "content": "設備C（検査機）"},
 ]
 
 # ---- マスタデータ：作業マスタ（作業名 → 標準所要時間[分]） ----
