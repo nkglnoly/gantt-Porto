@@ -189,7 +189,7 @@ with col1:
     st.subheader("表示月")
     st.selectbox("対象月", ["2026年9月"], index=0, disabled=True,
                  help="MVPではダミー固定。実装時は月切替で範囲取得する想定")
-    st.info("優先度カラー\n\n🔴 高　🟡 中　🟢 低\n\n⚠️＝実績コメントあり　📝＝メモあり（バーを長押し/タップで内容確認）")
+    st.info("優先度カラー\n\n🔴 高　🟡 中　🟢 低\n\n⚠️＝実績コメントあり　📝＝メモあり（バーをタップすると吹き出しで内容が表示されます）")
     st.metric("登録タスク数", len(st.session_state.tasks))
 
 with col2:
@@ -220,15 +220,13 @@ items_for_js = [
 items_json = json.dumps(items_for_js, ensure_ascii=False)
 
 # 設備数に応じてガント表示エリアの高さを動的に計算（1設備あたり約36px＋余白）
-gantt_height = max(420, len(EQUIPMENTS) * 36 + 60)
-iframe_height = gantt_height + 140  # 下の説明エリア＋余白ぶん
+# 画面内に収まるよう上限も設定し、それ以上は内部スクロール（verticalScroll）に任せる
+gantt_height = min(max(420, len(EQUIPMENTS) * 36 + 60), 600)
 
 html_code = f"""
-<div id="gantt-wrapper" style="display:flex; flex-direction:column; width:100%;">
-  <div id="visualization" style="width:100%; height:{gantt_height}px; order:1;"></div>
-  <div id="tapped-info" style="order:2; font-family:sans-serif; font-size:14px; margin-top:10px; padding:10px; border-radius:6px; background:#f5f5f5; min-height:24px; color:#333;">
-    タスクのバーをタップすると、ここにメモ・実績コメントが表示されます。
-  </div>
+<div id="gantt-outer" style="position:relative; width:100%; height:{gantt_height}px; max-height:{gantt_height}px; overflow:hidden;">
+  <div id="visualization" style="width:100%; height:100%;"></div>
+  <div id="detail-popup" style="display:none; position:absolute; z-index:999; max-width:80%; background:#333; color:#fff; font-family:sans-serif; font-size:13px; padding:10px 14px; border-radius:8px; box-shadow:0 2px 8px rgba(0,0,0,0.3); white-space:pre-wrap;"></div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/vis-timeline/7.7.3/vis-timeline-graph2d.min.js"></script>
@@ -266,6 +264,8 @@ html_code = f"""
   const container = document.getElementById('visualization');
 
   const options = {{
+    height: "{gantt_height}px",
+    verticalScroll: true,
     editable: {{
       updateTime: true,
       updateGroup: false,
@@ -291,9 +291,7 @@ html_code = f"""
       return vis.moment(date).locale('ja');
     }},
     onMove: function(item, callback) {{
-      document.getElementById('tapped-info').innerText =
-        "タスクID " + item.id + " を移動: 開始=" + item.start.toLocaleString() + " 終了=" + item.end.toLocaleString() +
-        "（※このプロトタイプでは後続タスクへの自動追従・保存はまだ未実装です／画面リロードで元に戻ります）";
+      console.log("moved:", item.id, item.start, item.end, "（※後続タスクへの自動追従・保存は未実装。画面リロードで元に戻ります）");
       callback(item);
     }}
   }};
@@ -307,25 +305,47 @@ html_code = f"""
   }}
 
   if (timeline) {{
+    const popup = document.getElementById('detail-popup');
+    const outer = document.getElementById('gantt-outer');
+
     timeline.on('select', function (properties) {{
-      const infoDiv = document.getElementById('tapped-info');
       if (!properties.items || properties.items.length === 0) {{
-        infoDiv.innerText = "タスクのバーをタップすると、ここにメモ・実績コメントが表示されます。";
+        popup.style.display = 'none';
         return;
       }}
       const t = itemDetailMap[properties.items[0]];
       if (!t) return;
+
       let lines = [];
-      lines.push("【" + t.content.replace(/<br>/g, " / ") + "】");
+      lines.push("【" + t.content.replace(/<br>/g, " / ").replace(/ ⚠️| 📝/g, "") + "】");
       lines.push(t.memo ? ("📝 メモ: " + t.memo) : "📝 メモ: (なし)");
       lines.push(t.comment ? ("⚠️ 実績コメント: " + t.comment) : "⚠️ 実績コメント: (なし)");
-      infoDiv.innerText = lines.join("\\n");
+      popup.innerText = lines.join("\\n");
+
+      // クリック/タップされた位置を基準にポップアップを表示（gantt-outer内の相対位置）
+      const outerRect = outer.getBoundingClientRect();
+      let x = 20, y = 20;
+      if (properties.event && properties.event.center) {{
+        x = properties.event.center.x - outerRect.left;
+        y = properties.event.center.y - outerRect.top;
+      }}
+      // はみ出し防止のための簡易調整
+      popup.style.left = Math.min(x, outerRect.width - 220) + "px";
+      popup.style.top = Math.min(y + 15, {gantt_height} - 100) + "px";
+      popup.style.display = 'block';
+    }});
+
+    // ガント外（背景）タップで閉じる
+    outer.addEventListener('click', function(e) {{
+      if (e.target === outer) {{
+        popup.style.display = 'none';
+      }}
     }});
   }}
 </script>
 """
 
-components.html(html_code, height=iframe_height, scrolling=True)
+components.html(html_code, height=gantt_height + 20, scrolling=False)
 
 # =========================================================
 # ---- タスク明細＋完了処理＋実績コメント＋削除機能 ----
