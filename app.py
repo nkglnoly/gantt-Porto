@@ -18,9 +18,8 @@ def ceil_to_hour(dt: datetime) -> datetime:
 # ---- マスタデータ：設備一覧 ----
 # =========================================================
 EQUIPMENTS = [
-    {"id": "EQ01", "content": "設備A（プレス機）"},
-    {"id": "EQ02", "content": "設備B（溶接機）"},
-    {"id": "EQ03", "content": "設備C（検査機）"},
+    {"id": f"EQ{i:02d}", "content": f"設備{chr(64+i) if i <= 26 else i}号機"}
+    for i in range(1, 21)
 ]
 
 # ---- マスタデータ：作業マスタ（作業名 → 標準所要時間[分]） ----
@@ -220,10 +219,16 @@ items_for_js = [
 ]
 items_json = json.dumps(items_for_js, ensure_ascii=False)
 
+# 設備数に応じてガント表示エリアの高さを動的に計算（1設備あたり約36px＋余白）
+gantt_height = max(420, len(EQUIPMENTS) * 36 + 60)
+iframe_height = gantt_height + 140  # 下の説明エリア＋余白ぶん
+
 html_code = f"""
-<div id="visualization" style="width:100%; height:420px;"></div>
-<div id="tapped-info" style="font-family:sans-serif; font-size:14px; margin-top:10px; padding:10px; border-radius:6px; background:#f5f5f5; min-height:24px; color:#333;">
-  タスクのバーをタップすると、ここにメモ・実績コメントが表示されます。
+<div id="gantt-wrapper" style="display:flex; flex-direction:column; width:100%;">
+  <div id="visualization" style="width:100%; height:{gantt_height}px; order:1;"></div>
+  <div id="tapped-info" style="order:2; font-family:sans-serif; font-size:14px; margin-top:10px; padding:10px; border-radius:6px; background:#f5f5f5; min-height:24px; color:#333;">
+    タスクのバーをタップすると、ここにメモ・実績コメントが表示されます。
+  </div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/vis-timeline/7.7.3/vis-timeline-graph2d.min.js"></script>
@@ -320,7 +325,7 @@ html_code = f"""
 </script>
 """
 
-components.html(html_code, height=540, scrolling=False)
+components.html(html_code, height=iframe_height, scrolling=True)
 
 # =========================================================
 # ---- タスク明細＋完了処理＋実績コメント＋削除機能 ----
