@@ -3,7 +3,6 @@
 <head>
 <meta charset="utf-8" />
 <script src="https://cdnjs.cloudflare.com/ajax/libs/vis-timeline/7.7.3/vis-timeline-graph2d.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/locale/ja.min.js"></script>
 <link href="https://cdnjs.cloudflare.com/ajax/libs/vis-timeline/7.7.3/vis-timeline-graph2d.min.css" rel="stylesheet" type="text/css" />
 <style>
   html, body { margin: 0; padding: 0; font-family: sans-serif; }
@@ -25,6 +24,18 @@
 <script>
   // ===== Streamlit コンポーネント通信の最小実装（公式プロトコル準拠） =====
   // 参考: streamlit-component-lib が内部で送っているメッセージ形式に準拠
+  function toLocalIsoString(date) {
+    // タイムゾーン変換をせず、ブラウザに表示されている通りのローカル時刻を
+    // "YYYY-MM-DDTHH:mm:ss" 形式の文字列にする（toISOString()はUTC変換されるため使わない）
+    const pad = (n) => String(n).padStart(2, "0");
+    return date.getFullYear() + "-" +
+           pad(date.getMonth() + 1) + "-" +
+           pad(date.getDate()) + "T" +
+           pad(date.getHours()) + ":" +
+           pad(date.getMinutes()) + ":" +
+           pad(date.getSeconds());
+  }
+
   function sendMessageToStreamlit(type, data) {
     const outboundData = Object.assign({
       isStreamlitMessage: true,
@@ -49,6 +60,21 @@
   let renderData = null;
   let timeline = null;
   let itemDetailMap = {};
+
+  // vis-timeline内蔵moment（vis.moment）に日本語ロケールを直接定義する。
+  // 外部のmoment.jsロケールファイルはvis-timeline同梱momentと衝突して
+  // "Uncaught Error: Script error" を起こすため使用しない。
+  try {
+    if (window.vis && vis.moment) {
+      vis.moment.defineLocale("ja-gantt", {
+        weekdaysShort: ["日", "月", "火", "水", "木", "金", "土"],
+        weekdaysMin: ["日", "月", "火", "水", "木", "金", "土"]
+      });
+      vis.moment.locale("ja-gantt");
+    }
+  } catch (e) {
+    console.error("日本語ロケール定義エラー:", e);
+  }
 
   function onRender(event) {
     if (!event.data || event.data.type !== "streamlit:render") {
@@ -115,7 +141,7 @@
         majorLabels: { hour: "M/D(ddd)" }
       },
       moment: function (date) {
-        return vis.moment(date).locale("ja");
+        return vis.moment(date);
       },
       onMove: function (item, callback) {
         callback(item);
@@ -123,7 +149,7 @@
         setComponentValue({
           action: "move",
           task_id: item.id,
-          new_start: item.start.toISOString().slice(0, 19)
+          new_start: toLocalIsoString(item.start)
         });
       }
     };
