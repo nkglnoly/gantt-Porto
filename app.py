@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 
 st.set_page_config(page_title="ガントチャート プロトタイプ", layout="wide")
 st.title("🏭 設備別ガントチャート プロトタイプ")
-st.caption("タスク登録フォーム＋完了実績処理版（後続タスク自動追従はまだ未実装）")
+st.caption("タスク登録フォーム＋完了実績処理＋ドラッグ後続追従版")
 
 
 def ceil_to_hour(dt: datetime) -> datetime:
@@ -13,6 +13,59 @@ def ceil_to_hour(dt: datetime) -> datetime:
     if dt.minute == 0 and dt.second == 0 and dt.microsecond == 0:
         return dt.replace(minute=0, second=0, microsecond=0)
     return (dt.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1))
+
+
+def get_effective_start(task: dict) -> datetime:
+    """タスクの「今表示すべき開始時刻」を返す（完了済みなら実績、それ以外は予定）"""
+    return task["actual_start"] or task["start"]
+
+
+def get_effective_end(task: dict) -> datetime:
+    """タスクの「今表示すべき終了時刻」を返す（完了済みなら実績、それ以外は予定）"""
+    return task["actual_end"] or task["end"]
+
+
+def propagate_same_equipment(group_id: str, changed_task_id: int):
+    """
+    同一設備（group_id）内で、changed_task_id より後ろ（開始日時が後）のタスクを
+    開始日時順に並べ、前のタスクの終了直後へ隙間なく強制接続するように
+    開始・終了日時をスライドさせる（直列制約の追従ロジック）。
+
+    - 各タスクの所要時間（終了-開始の長さ）は固定のまま、位置だけを移動する。
+    - 完了済みタスクは「実績」の期間を、未完了タスクは「予定」の期間を対象に扱う。
+    """
+    tasks = [t for t in st.session_state.tasks if t["group"] == group_id]
+    if not tasks:
+        return
+
+    # 開始日時（実効値）でソートして、設備内の並び順を確定
+    tasks_sorted = sorted(tasks, key=lambda t: get_effective_start(t))
+
+    # 変更されたタスクの位置を特定
+    changed_index = next(
+        (i for i, t in enumerate(tasks_sorted) if t["id"] == changed_task_id), None
+    )
+    if changed_index is None:
+        return
+
+    # 変更されたタスクの終了時刻を起点に、それより後ろのタスクを順に押し出す
+    cursor_end = get_effective_end(tasks_sorted[changed_index])
+
+    for t in tasks_sorted[changed_index + 1:]:
+        duration = get_effective_end(t) - get_effective_start(t)
+        new_start = cursor_end
+        new_end = new_start + duration
+
+        if t["status"] == "完了":
+            # 完了済みタスクは実績時刻を上書き
+            t["actual_start"] = new_start
+            t["actual_end"] = new_end
+        else:
+            # 未完了タスクは予定時刻を上書き
+            t["start"] = new_start
+            t["end"] = new_end
+
+        cursor_end = new_end
 
 # =========================================================
 # ---- マスタデータ：設備一覧 ----
@@ -80,6 +133,44 @@ def get_work_duration(work_name: str) -> int:
         if w["work_name"] == work_name:
             return w["duration_min"]
     return 60  # フォールバック
+
+
+# =========================================================
+# ---- ガントのドラッグ結果を反映（クエリパラメータ経由でJS→Pythonへ連携） ----
+# =========================================================
+# vis-timeline側でドラッグ完了時に、st.query_params へ
+# drag_task_id / drag_new_start を書き込む（JS側の実装は後述）。
+# ここでその値を検知し、該当タスクの開始日時を更新→同設備の後続タスクへ追従させる。
+_qp = st.query_params
+if "drag_task_id" in _qp and "drag_new_start" in _qp:
+    try:
+        drag_task_id = int(_qp["drag_task_id"])
+        drag_new_start_str = _qp["drag_new_start"]
+        # 二重適用防止：直前に処理済みの内容と同じなら何もしない
+        already_applied = st.session_state.get("_last_drag_applied") == (drag_task_id, drag_new_start_str)
+
+        if not already_applied:
+            target = next((t for t in st.session_state.tasks if t["id"] == drag_task_id), None)
+            if target is not None:
+                new_start = datetime.fromisoformat(drag_new_start_str)
+                duration = get_effective_end(target) - get_effective_start(target)
+                new_end = new_start + duration
+
+                if target["status"] == "完了":
+                    target["actual_start"] = new_start
+                    target["actual_end"] = new_end
+                else:
+                    target["start"] = new_start
+                    target["end"] = new_end
+
+                propagate_same_equipment(target["group"], target["id"])
+                st.session_state["_last_drag_applied"] = (drag_task_id, drag_new_start_str)
+                st.toast(f"タスクID {drag_task_id} の日程を変更し、後続タスクへ自動追従しました。")
+    except (ValueError, TypeError):
+        pass
+    finally:
+        # クエリパラメータをクリアして、リロード時の再適用を防ぐ
+        st.query_params.clear()
 
 
 # =========================================================
@@ -194,7 +285,7 @@ with col1:
     st.metric("登録タスク数", len(st.session_state.tasks))
 
 with col2:
-    st.subheader("設備別タイムライン（ドラッグで開始時刻を移動できます）")
+    st.subheader("設備別タイムライン（ドラッグで開始時刻を移動→同設備の後続タスクが自動追従します）")
 
 groups_json = json.dumps(EQUIPMENTS, ensure_ascii=False)
 
@@ -292,8 +383,18 @@ html_code = f"""
       return vis.moment(date).locale('ja');
     }},
     onMove: function(item, callback) {{
-      console.log("moved:", item.id, item.start, item.end, "（※後続タスクへの自動追従・保存は未実装。画面リロードで元に戻ります）");
       callback(item);
+      // 親ページ（Streamlit本体）のURLにクエリパラメータを付与してリロードし、
+      // Python側に「どのタスクが」「いつに移動したか」を伝える
+      try {{
+        const newStartIso = item.start.toISOString().slice(0, 19); // 秒まで（タイムゾーンオフセット除去）
+        const topUrl = new URL(window.top.location.href);
+        topUrl.searchParams.set("drag_task_id", item.id);
+        topUrl.searchParams.set("drag_new_start", newStartIso);
+        window.top.location.href = topUrl.toString();
+      }} catch (e) {{
+        console.error("ドラッグ結果の反映に失敗しました:", e);
+      }}
     }}
   }};
 
@@ -391,7 +492,8 @@ for t in st.session_state.tasks:
                     t["status"] = "完了"
                     t["actual_start"] = t["start"]  # 開始確定時刻（今回は予定開始をそのまま使用）
                     t["actual_end"] = actual_end
-                    st.success(f"完了しました！（実績終了：{actual_end.strftime('%m/%d %H:%M')}）")
+                    propagate_same_equipment(t["group"], t["id"])
+                    st.success(f"完了しました！（実績終了：{actual_end.strftime('%m/%d %H:%M')}／後続タスクを自動追従しました）")
                     st.rerun()
             if st.button("🗑", key=f"del_{t['id']}", use_container_width=True):
                 st.session_state.tasks = [x for x in st.session_state.tasks if x["id"] != t["id"]]
