@@ -1,7 +1,6 @@
 import streamlit as st
-import streamlit.components.v1 as components
-import json
 from datetime import datetime, timedelta
+from gantt_component import gantt_chart
 
 st.set_page_config(page_title="ガントチャート プロトタイプ", layout="wide")
 st.title("🏭 設備別ガントチャート プロトタイプ")
@@ -136,44 +135,6 @@ def get_work_duration(work_name: str) -> int:
 
 
 # =========================================================
-# ---- ガントのドラッグ結果を反映（クエリパラメータ経由でJS→Pythonへ連携） ----
-# =========================================================
-# vis-timeline側でドラッグ完了時に、st.query_params へ
-# drag_task_id / drag_new_start を書き込む（JS側の実装は後述）。
-# ここでその値を検知し、該当タスクの開始日時を更新→同設備の後続タスクへ追従させる。
-_qp = st.query_params
-if "drag_task_id" in _qp and "drag_new_start" in _qp:
-    try:
-        drag_task_id = int(_qp["drag_task_id"])
-        drag_new_start_str = _qp["drag_new_start"]
-        # 二重適用防止：直前に処理済みの内容と同じなら何もしない
-        already_applied = st.session_state.get("_last_drag_applied") == (drag_task_id, drag_new_start_str)
-
-        if not already_applied:
-            target = next((t for t in st.session_state.tasks if t["id"] == drag_task_id), None)
-            if target is not None:
-                new_start = datetime.fromisoformat(drag_new_start_str)
-                duration = get_effective_end(target) - get_effective_start(target)
-                new_end = new_start + duration
-
-                if target["status"] == "完了":
-                    target["actual_start"] = new_start
-                    target["actual_end"] = new_end
-                else:
-                    target["start"] = new_start
-                    target["end"] = new_end
-
-                propagate_same_equipment(target["group"], target["id"])
-                st.session_state["_last_drag_applied"] = (drag_task_id, drag_new_start_str)
-                st.toast(f"タスクID {drag_task_id} の日程を変更し、後続タスクへ自動追従しました。")
-    except (ValueError, TypeError):
-        pass
-    finally:
-        # クエリパラメータをクリアして、リロード時の再適用を防ぐ
-        st.query_params.clear()
-
-
-# =========================================================
 # ---- サイドバー：タスク登録フォーム ----
 # =========================================================
 with st.sidebar:
@@ -287,8 +248,6 @@ with col1:
 with col2:
     st.subheader("設備別タイムライン（ドラッグで開始時刻を移動→同設備の後続タスクが自動追従します）")
 
-groups_json = json.dumps(EQUIPMENTS, ensure_ascii=False)
-
 items_for_js = [
     {
         "id": t["id"],
@@ -309,145 +268,45 @@ items_for_js = [
     }
     for t in st.session_state.tasks
 ]
-items_json = json.dumps(items_for_js, ensure_ascii=False)
 
 # 設備数に応じてガント表示エリアの高さを動的に計算（1設備あたり約36px＋余白）
 # 画面内に収まるよう上限も設定し、それ以上は内部スクロール（verticalScroll）に任せる
 gantt_height = min(max(420, len(EQUIPMENTS) * 36 + 60), 600)
 
-html_code = f"""
-<div id="gantt-outer" style="position:relative; width:100%; height:{gantt_height}px; max-height:{gantt_height}px; overflow:hidden;">
-  <div id="visualization" style="width:100%; height:100%;"></div>
-  <div id="detail-popup" style="display:none; position:absolute; z-index:999; max-width:80%; background:#333; color:#fff; font-family:sans-serif; font-size:13px; padding:10px 14px; border-radius:8px; box-shadow:0 2px 8px rgba(0,0,0,0.3); white-space:pre-wrap;"></div>
-</div>
+drag_result = gantt_chart(
+    groups=EQUIPMENTS,
+    items=items_for_js,
+    view_start=base.replace(hour=0).isoformat(),
+    view_end=(base + timedelta(days=1)).replace(hour=0).isoformat(),
+    height=gantt_height,
+    key="main_gantt",
+)
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/vis-timeline/7.7.3/vis-timeline-graph2d.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/locale/ja.min.js"></script>
-<link href="https://cdnjs.cloudflare.com/ajax/libs/vis-timeline/7.7.3/vis-timeline-graph2d.min.css" rel="stylesheet" type="text/css" />
+# ドラッグ操作の結果をタスクデータへ反映し、同設備の後続タスクへ追従させる
+if drag_result and drag_result.get("action") == "move":
+    _drag_task_id = drag_result.get("task_id")
+    _drag_new_start_str = drag_result.get("new_start")
+    _already_applied = st.session_state.get("_last_drag_applied") == (_drag_task_id, _drag_new_start_str)
 
-<script>
-  const rawGroups = {groups_json};
-  const rawItems = {items_json};
+    if not _already_applied and _drag_task_id is not None and _drag_new_start_str:
+        _target = next((t for t in st.session_state.tasks if t["id"] == _drag_task_id), None)
+        if _target is not None:
+            _new_start = datetime.fromisoformat(_drag_new_start_str)
+            _duration = get_effective_end(_target) - get_effective_start(_target)
+            _new_end = _new_start + _duration
 
-  const priorityColor = {{
-    "高": "#ffcdd2",
-    "中": "#fff9c4",
-    "低": "#c8e6c9"
-  }};
+            if _target["status"] == "完了":
+                _target["actual_start"] = _new_start
+                _target["actual_end"] = _new_end
+            else:
+                _target["start"] = _new_start
+                _target["end"] = _new_end
 
-  const itemDetailMap = {{}};
-  rawItems.forEach(t => {{ itemDetailMap[t.id] = t; }});
+            propagate_same_equipment(_target["group"], _target["id"])
+            st.session_state["_last_drag_applied"] = (_drag_task_id, _drag_new_start_str)
+            st.toast(f"タスクID {_drag_task_id} の日程を変更し、後続タスクへ自動追従しました。")
+            st.rerun()
 
-  const groups = new vis.DataSet(rawGroups);
-
-  const items = new vis.DataSet(rawItems.map(t => {{
-    return {{
-      id: t.id,
-      group: t.group,
-      content: t.content,
-      start: t.start,
-      end: t.end,
-      style: "background-color:" + priorityColor[t.priority] + "; border-color:#888;" +
-             (t.status === "完了" ? " opacity:0.55; border-style:dashed;" : "") +
-             (t.comment ? " box-shadow: 0 0 0 2px #ff9800 inset;" : "")
-    }};
-  }}));
-
-  const container = document.getElementById('visualization');
-
-  const options = {{
-    height: "{gantt_height}px",
-    verticalScroll: true,
-    editable: {{
-      updateTime: true,
-      updateGroup: false,
-      add: false,
-      remove: false
-    }},
-    orientation: 'top',
-    stack: false,
-    zoomMin: 1000 * 60 * 60 * 2,
-    zoomMax: 1000 * 60 * 60 * 24 * 31,
-    start: "{base.replace(hour=0).isoformat()}",
-    end: "{(base + timedelta(days=1)).replace(hour=0).isoformat()}",
-    timeAxis: {{scale: 'hour', step: 1}},
-    format: {{
-      minorLabels: {{
-        hour: 'HH:mm'
-      }},
-      majorLabels: {{
-        hour: 'M/D(ddd)'
-      }}
-    }},
-    moment: function(date) {{
-      return vis.moment(date).locale('ja');
-    }},
-    onMove: function(item, callback) {{
-      callback(item);
-      // 親ページ（Streamlit本体）のURLにクエリパラメータを付与してリロードし、
-      // Python側に「どのタスクが」「いつに移動したか」を伝える
-      try {{
-        const newStartIso = item.start.toISOString().slice(0, 19); // 秒まで（タイムゾーンオフセット除去）
-        const topUrl = new URL(window.top.location.href);
-        topUrl.searchParams.set("drag_task_id", item.id);
-        topUrl.searchParams.set("drag_new_start", newStartIso);
-        window.top.location.href = topUrl.toString();
-      }} catch (e) {{
-        console.error("ドラッグ結果の反映に失敗しました:", e);
-      }}
-    }}
-  }};
-
-  let timeline = null;
-  try {{
-    timeline = new vis.Timeline(container, items, groups, options);
-  }} catch (e) {{
-    document.getElementById('visualization').innerText = "ガント描画エラー: " + e.message;
-    console.error(e);
-  }}
-
-  if (timeline) {{
-    const popup = document.getElementById('detail-popup');
-    const outer = document.getElementById('gantt-outer');
-
-    timeline.on('select', function (properties) {{
-      if (!properties.items || properties.items.length === 0) {{
-        popup.style.display = 'none';
-        return;
-      }}
-      const t = itemDetailMap[properties.items[0]];
-      if (!t) return;
-
-      let lines = [];
-      lines.push("【" + t.content.replace(/<br>/g, " / ").replace(/ ⚠️| 📝/g, "") + "】");
-      lines.push(t.memo ? ("📝 メモ: " + t.memo) : "📝 メモ: (なし)");
-      lines.push(t.comment ? ("⚠️ 実績コメント: " + t.comment) : "⚠️ 実績コメント: (なし)");
-      popup.innerText = lines.join("\\n");
-
-      // クリック/タップされた位置を基準にポップアップを表示（gantt-outer内の相対位置）
-      const outerRect = outer.getBoundingClientRect();
-      let x = 20, y = 20;
-      if (properties.event && properties.event.center) {{
-        x = properties.event.center.x - outerRect.left;
-        y = properties.event.center.y - outerRect.top;
-      }}
-      // はみ出し防止のための簡易調整
-      popup.style.left = Math.min(x, outerRect.width - 220) + "px";
-      popup.style.top = Math.min(y + 15, {gantt_height} - 100) + "px";
-      popup.style.display = 'block';
-    }});
-
-    // ガント外（背景）タップで閉じる
-    outer.addEventListener('click', function(e) {{
-      if (e.target === outer) {{
-        popup.style.display = 'none';
-      }}
-    }});
-  }}
-</script>
-"""
-
-components.html(html_code, height=gantt_height + 20, scrolling=False)
 
 # =========================================================
 # ---- タスク明細＋完了処理＋実績コメント＋削除機能 ----
