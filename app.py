@@ -26,10 +26,16 @@ def get_effective_end(task: dict) -> datetime:
 
 def propagate_same_equipment(group_id: str, changed_task_id: int):
     """
-    同一設備（group_id）内で、changed_task_id より後ろ（開始日時が後）のタスクを
-    開始日時順に並べ、前のタスクの終了直後へ隙間なく強制接続するように
-    開始・終了日時をスライドさせる（直列制約の追従ロジック）。
+    同一設備（group_id）内で、changed_task_id より後ろ（並び順で後）のタスクを
+    前のタスクの終了直後へ隙間なく強制接続するように開始・終了日時をスライドさせる
+    （直列制約の追従ロジック）。
 
+    - 「後続」の判定は、変更対象タスクを除いた他タスク同士の順序（変更の影響を
+      受けていない、お互いの現在の開始日時の前後関係）を基準に行う。
+      変更対象タスクの新しい開始日時をその他タスクの並びに割り込ませ、
+      割り込み位置より後ろにあるタスクだけを後続として押し出す。
+      （呼び出し時点で変更対象タスク自身の開始・終了日時は、
+       既にドラッグ/完了操作後の新しい値に更新されている前提）
     - 各タスクの所要時間（終了-開始の長さ）は固定のまま、位置だけを移動する。
     - 完了済みタスクは「実績」の期間を、未完了タスクは「予定」の期間を対象に扱う。
     """
@@ -37,20 +43,22 @@ def propagate_same_equipment(group_id: str, changed_task_id: int):
     if not tasks:
         return
 
-    # 開始日時（実効値）でソートして、設備内の並び順を確定
-    tasks_sorted = sorted(tasks, key=lambda t: get_effective_start(t))
-
-    # 変更されたタスクの位置を特定
-    changed_index = next(
-        (i for i, t in enumerate(tasks_sorted) if t["id"] == changed_task_id), None
-    )
-    if changed_index is None:
+    changed_task = next((t for t in tasks if t["id"] == changed_task_id), None)
+    if changed_task is None:
         return
 
-    # 変更されたタスクの終了時刻を起点に、それより後ろのタスクを順に押し出す
-    cursor_end = get_effective_end(tasks_sorted[changed_index])
+    # 変更対象を除いた他タスク同士の順序（お互いの現在の開始日時）はそのまま尊重する
+    other_tasks = [t for t in tasks if t["id"] != changed_task_id]
+    others_sorted = sorted(other_tasks, key=lambda t: get_effective_start(t))
 
-    for t in tasks_sorted[changed_index + 1:]:
+    # 変更対象タスクの新しい開始日時を基準に、その他タスクの並びへ割り込ませる
+    changed_new_start = get_effective_start(changed_task)
+    successors = [t for t in others_sorted if get_effective_start(t) >= changed_new_start]
+
+    # 変更されたタスクの終了時刻を起点に、後続タスクを順に押し出す
+    cursor_end = get_effective_end(changed_task)
+
+    for t in successors:
         duration = get_effective_end(t) - get_effective_start(t)
         new_start = cursor_end
         new_end = new_start + duration
