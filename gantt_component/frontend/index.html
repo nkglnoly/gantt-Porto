@@ -1,1 +1,185 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/vis-timeline/7.7.3/vis-timeline-graph2d.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/locale/ja.min.js"></script>
+<link href="https://cdnjs.cloudflare.com/ajax/libs/vis-timeline/7.7.3/vis-timeline-graph2d.min.css" rel="stylesheet" type="text/css" />
+<style>
+  html, body { margin: 0; padding: 0; font-family: sans-serif; }
+  #gantt-outer { position: relative; width: 100%; overflow: hidden; }
+  #visualization { width: 100%; }
+  #detail-popup {
+    display: none; position: absolute; z-index: 999; max-width: 80%;
+    background: #333; color: #fff; font-size: 13px; padding: 10px 14px;
+    border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.3); white-space: pre-wrap;
+  }
+</style>
+</head>
+<body>
+  <div id="gantt-outer">
+    <div id="visualization"></div>
+    <div id="detail-popup"></div>
+  </div>
 
+<script>
+  // ===== Streamlit コンポーネント通信の最小実装（公式プロトコル準拠） =====
+  // 参考: streamlit-component-lib が内部で送っているメッセージ形式に準拠
+  function sendMessageToStreamlit(type, data) {
+    const outboundData = Object.assign({
+      isStreamlitMessage: true,
+      type: type,
+    }, data);
+    window.parent.postMessage(outboundData, "*");
+  }
+
+  function notifyComponentReady() {
+    sendMessageToStreamlit("streamlit:componentReady", { apiVersion: 1 });
+  }
+
+  function setFrameHeight(height) {
+    sendMessageToStreamlit("streamlit:setFrameHeight", { height: height });
+  }
+
+  function setComponentValue(value) {
+    sendMessageToStreamlit("streamlit:setComponentValue", { value: value });
+  }
+
+  // Streamlitからの render イベント（Python側の引数が渡ってくる）
+  let renderData = null;
+  let timeline = null;
+  let itemDetailMap = {};
+
+  function onRender(event) {
+    if (!event.data || event.data.type !== "streamlit:render") {
+      return;
+    }
+    const data = event.data;
+    // 初回のみ描画。以降、argsが変わらなければ再構築しない（ちらつき防止）
+    if (renderData && JSON.stringify(renderData.args) === JSON.stringify(data.args)) {
+      return;
+    }
+    renderData = data;
+    buildGantt(data.args);
+  }
+
+  function buildGantt(args) {
+    const rawGroups = args.groups || [];
+    const rawItems = args.items || [];
+    const ganttHeight = args.height || 420;
+
+    document.getElementById("visualization").style.height = ganttHeight + "px";
+    document.getElementById("gantt-outer").style.height = ganttHeight + "px";
+
+    const priorityColor = {
+      "高": "#ffcdd2",
+      "中": "#fff9c4",
+      "低": "#c8e6c9"
+    };
+
+    itemDetailMap = {};
+    rawItems.forEach(t => { itemDetailMap[t.id] = t; });
+
+    const groups = new vis.DataSet(rawGroups);
+    const items = new vis.DataSet(rawItems.map(t => ({
+      id: t.id,
+      group: t.group,
+      content: t.content,
+      start: t.start,
+      end: t.end,
+      style: "background-color:" + priorityColor[t.priority] + "; border-color:#888;" +
+             (t.status === "完了" ? " opacity:0.55; border-style:dashed;" : "") +
+             (t.comment ? " box-shadow: 0 0 0 2px #ff9800 inset;" : "")
+    })));
+
+    const container = document.getElementById("visualization");
+
+    const options = {
+      height: ganttHeight + "px",
+      verticalScroll: true,
+      editable: {
+        updateTime: true,
+        updateGroup: false,
+        add: false,
+        remove: false
+      },
+      orientation: "top",
+      stack: false,
+      zoomMin: 1000 * 60 * 60 * 2,
+      zoomMax: 1000 * 60 * 60 * 24 * 31,
+      start: args.view_start,
+      end: args.view_end,
+      timeAxis: { scale: "hour", step: 1 },
+      format: {
+        minorLabels: { hour: "HH:mm" },
+        majorLabels: { hour: "M/D(ddd)" }
+      },
+      moment: function (date) {
+        return vis.moment(date).locale("ja");
+      },
+      onMove: function (item, callback) {
+        callback(item);
+        // ドラッグ完了：Pythonへ「どのタスクが」「いつに移動したか」を返す
+        setComponentValue({
+          action: "move",
+          task_id: item.id,
+          new_start: item.start.toISOString().slice(0, 19)
+        });
+      }
+    };
+
+    if (timeline) {
+      timeline.destroy();
+    }
+    try {
+      timeline = new vis.Timeline(container, items, groups, options);
+    } catch (e) {
+      container.innerText = "ガント描画エラー: " + e.message;
+      console.error(e);
+      timeline = null;
+    }
+
+    if (timeline) {
+      timeline.on("select", function (properties) {
+        const popup = document.getElementById("detail-popup");
+        const outer = document.getElementById("gantt-outer");
+        if (!properties.items || properties.items.length === 0) {
+          popup.style.display = "none";
+          return;
+        }
+        const t = itemDetailMap[properties.items[0]];
+        if (!t) return;
+
+        let lines = [];
+        lines.push("【" + t.content.replace(/<br>/g, " / ").replace(/ ⚠️| 📝/g, "") + "】");
+        lines.push(t.memo ? ("📝 メモ: " + t.memo) : "📝 メモ: (なし)");
+        lines.push(t.comment ? ("⚠️ 実績コメント: " + t.comment) : "⚠️ 実績コメント: (なし)");
+        popup.innerText = lines.join("\n");
+
+        const outerRect = outer.getBoundingClientRect();
+        let x = 20, y = 20;
+        if (properties.event && properties.event.center) {
+          x = properties.event.center.x - outerRect.left;
+          y = properties.event.center.y - outerRect.top;
+        }
+        popup.style.left = Math.min(x, outerRect.width - 220) + "px";
+        popup.style.top = Math.min(y + 15, ganttHeight - 100) + "px";
+        popup.style.display = "block";
+      });
+
+      document.getElementById("gantt-outer").addEventListener("click", function (e) {
+        if (e.target.id === "gantt-outer" || e.target.id === "visualization") {
+          document.getElementById("detail-popup").style.display = "none";
+        }
+      });
+    }
+
+    setFrameHeight(ganttHeight + 20);
+  }
+
+  window.addEventListener("message", onRender);
+  notifyComponentReady();
+  setFrameHeight(440);
+</script>
+</body>
+</html>
